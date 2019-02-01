@@ -3,146 +3,115 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+
+	"github.com/gorilla/mux"
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/zidhuss/pst/db"
 )
 
-type Paste struct {
-	Id   string
-	Body []byte
+const programURL = "pst.zidhuss.tech"
+
+type app struct {
+	db *db.PasteDatabase
 }
 
 func main() {
-	err := http.ListenAndServe(":8080", handler())
+	pst := &app{db.CreatePasteDatabase("pst.db")}
+	err := http.ListenAndServe("127.0.0.1:8081", handler(pst))
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func handler() http.Handler {
-	r := http.NewServeMux()
-	r.HandleFunc("/", home)
+func handler(app *app) http.Handler {
+	r := mux.NewRouter()
+
+	r.HandleFunc("/", app.home).
+		Methods("GET")
+
+	r.HandleFunc("/", app.postPaste).
+		Methods("POST")
+
+	r.HandleFunc("/{pasteID}", app.retrievePaste)
 	return r
 }
 
-func home(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		fmt.Fprintf(w, Help)
-	case "POST":
-		s := r.FormValue("f1")
-		fmt.Fprintf(w, s)
+func (pst *app) retrievePaste(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	pasteID := vars["pasteID"]
+
+	paste, err := pst.db.RetrievePaste(pasteID)
+	if err != nil {
+		// TODO: 404?
+		log.Printf("%s\n", err)
+		return
+	}
+	w.Write(paste.Data)
+}
+
+func (pst *app) postPaste(w http.ResponseWriter, r *http.Request) {
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	for i := 1; ; i++ {
+		contents := r.FormValue(fmt.Sprintf("f:%d", i))
+
+		if contents == "" {
+			break
+		}
+
+		paste, err := pst.db.StorePaste([]byte(contents))
+		if err != nil {
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		fmt.Fprintf(w, "https://%s/%s\n", programURL, paste.ID)
+
+		log.Printf("Storing paste %s from %s\n", paste.ID, ip)
 	}
 }
 
-var Help string = `
+func (pst *app) home(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, Help)
+}
+
+var Help = fmt.Sprintf(`
 pst(1)                               PST                                  pst(1)
 
 NAME
 
-    pst: command line pastebin.
+	pst: command line pastebin.
 
 
 TL;DR
 
-    ~$ echo Hello world. | curl -F 'f:1=<-' pst
-    http://pst/fpW
+	~$ echo Hello world. | curl -F 'f:1=<-' %[1]s
+	https://%[1]s/fpW
 
 
 GET
 
-    pst/ID
-        raw
-
-    pst/ID/
-        default syntax language (by filetype, if provided)
-        append #n-LINENO to link directly to a particular line
-        uses pygments, see pygments documentation for details
-
-    pst/ID/LANG
-        explicitly set language
-
-    pst/ID+
-        console highlighting (default)
-
-    pst/ID+LANG
-        console highlighting (explicitly set language)
+	%[1]s/ID
+		raw
 
 
 POST
 
-    pst/
+	%[1]s/
 
-        f:N    contents or attached file.
+		f:N    contents or attached file.
 
-    where N is a unique number within request. (This allows you to post
-    multiple files at once.)
+	where N is a unique number within request. (This allows you to post
+	multiple files at once.)
 
-    returns: http://pst/id for N in request
-
-
-DELETE
-
-    pst/ID
-        delete ID.
+	returns: https://%[1]s/id for N in request
 
 
 EXAMPLES
 
-    Anonymous, unnamed paste, two ways:
+	Anonymous, unnamed paste, two ways:
 
-        cat file.ext | curl -F 'f:1=<-' pst
-        curl -F 'f:1=@file.ext' pst
-
-
-    Delete ID, two ways:
-
-        curl -n -X DELETE pst/ID
-        curl -F 'rm=ID' pst
-
-
-CLIENT
-
-    A client is maintained at pst/client
-
-        curl pst/client > pst
-        chmod +x pst
-        ./pst -h
-
-    Or if you wish, paste the following function into $HOME/.bashrc:
-
-        pst() {
-            local opts
-            local OPTIND
-            [ -f "$HOME/.netrc" ] && opts='-n'
-            while getopts ":hd:i:n:" x; do
-                case $x in
-                    h) echo "pst [-d ID] [-i ID] [-n N] [opts]"; return;;
-                    d) $echo curl $opts -X DELETE pst/$OPTARG; return;;
-                    i) opts="$opts -X PUT"; local id="$OPTARG";;
-                    n) opts="$opts -F read:1=$OPTARG";;
-                esac
-            done
-            shift $(($OPTIND - 1))
-            [ -t 0 ] && {
-                local filename="$1"
-                shift
-                [ "$filename" ] && {
-                    curl $opts -F f:1=@"$filename" $* pst/$id
-                    return
-                }
-                echo "^C to cancel, ^D to send."
-            }
-            curl $opts -F f:1='<-' $* pst/$id
-        }
-
-    Then open a new shell and type ` + "`pst -h`" + `
-
-
-CAVEATS:
-    Paste at your risk. Be nice please.
-
-    The codebase for pst is intended to be free and open-source. It is not
-    published at the moment because the author doesn't want to publish code
-    that isn't pretty and pleasant (and is also deeply lazy about getting it
-    there).
-`
+		cat file.ext | curl -F 'f:1=<-' %[1]s
+		curl -F 'f:1=@file.ext' %[1]s
+`, programURL)
