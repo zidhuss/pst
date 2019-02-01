@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -53,14 +54,28 @@ func (pst *app) retrievePaste(w http.ResponseWriter, r *http.Request) {
 
 func (pst *app) postPaste(w http.ResponseWriter, r *http.Request) {
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	for i := 1; ; i++ {
-		contents := r.FormValue(fmt.Sprintf("f:%d", i))
 
-		if contents == "" {
-			break
+	r.Body = http.MaxBytesReader(w, r.Body, 2*1024*1024) // 2 Mb
+
+	for i := 1; ; i++ {
+		key := fmt.Sprintf("f:%d", i)
+		contents := []byte(r.FormValue(key))
+
+		if len(contents) == 0 {
+
+			f, _, err := r.FormFile(key)
+			if err != nil {
+				break
+			}
+
+			contents, err = ioutil.ReadAll(f)
+			if err != nil {
+				break
+			}
+
 		}
 
-		paste, err := pst.db.StorePaste([]byte(contents))
+		paste, err := pst.db.StorePaste(contents)
 		if err != nil {
 			fmt.Fprintf(w, "%s", err)
 			return
