@@ -129,4 +129,9 @@ EXAMPLES
 
 		cat file.ext | curl -F 'f:1=<-' %[1]s
 		curl -F 'f:1=@file.ext' %[1]s
+
+
+SEE ALSO
+
+	https://github.com/zidhuss/pst
 `, programURL)
